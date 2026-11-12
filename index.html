@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Platea Orders</title>
+<style>
+  :root {
+    --night: #16213a;
+    --paper: #f6f7f4;
+    --ink: #1b1f2a;
+    --muted: #5e6573;
+    --red: #c8302b;
+    --line: #cfd3da;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--night);
+    color: var(--ink);
+    font: 17px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 20px 40px;
+  }
+  .ticket {
+    position: relative;
+    width: 100%;
+    max-width: 380px;
+    background: var(--paper);
+    padding: 32px 24px 28px;
+  }
+  .ticket::after {
+    content: "";
+    position: absolute;
+    left: 0; right: 0; top: 100%;
+    height: 14px;
+    background:
+      linear-gradient(135deg, var(--paper) 50%, transparent 50%) 0 0 / 14px 14px,
+      linear-gradient(225deg, var(--paper) 50%, transparent 50%) 0 0 / 14px 14px;
+  }
+  h1 { margin: 0 0 4px; font-size: 30px; line-height: 1.1; font-weight: 800; letter-spacing: -0.02em; }
+  p { margin: 0 0 20px; color: var(--muted); }
+  label { display: block; margin: 0 0 6px; font-weight: 600; }
+  input {
+    width: 100%;
+    min-height: 48px;
+    margin: 0 0 16px;
+    padding: 10px 12px;
+    font: inherit;
+    color: var(--ink);
+    background: #fff;
+    border: 1.5px solid var(--line);
+    border-radius: 6px;
+  }
+  input:focus-visible, button:focus-visible { outline: 3px solid var(--night); outline-offset: 2px; }
+  button {
+    width: 100%;
+    min-height: 52px;
+    font: inherit;
+    font-weight: 700;
+    color: #fff;
+    background: var(--red);
+    border: 0;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.6; cursor: default; }
+  button.quiet { color: var(--ink); background: transparent; border: 1.5px solid var(--line); }
+  #error { min-height: 1.45em; margin: 0 0 12px; color: var(--red); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<main class="ticket">
+  <section id="loginView" hidden>
+    <h1>Platea Orders</h1>
+    <p>Sign in to take orders.</p>
+    <form id="loginForm">
+      <label for="email">Email</label>
+      <input id="email" type="email" autocomplete="username" required>
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" required>
+      <div id="error" role="alert"></div>
+      <button id="signIn" type="submit">Sign in</button>
+    </form>
+  </section>
+
+  <section id="homeView" hidden>
+    <h1>Hello, <span id="who"></span></h1>
+    <p>You are signed in as <strong id="role"></strong>. Tables and orders come next.</p>
+    <button id="signOut" class="quiet" type="button">Sign out</button>
+  </section>
+</main>
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+  import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut }
+    from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+  import { getFirestore, doc, getDoc }
+    from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+  const app = initializeApp({
+    apiKey: "AIzaSyAtotOQduDnlSCQHQwtVN_LCycAYXgCnkI",
+    authDomain: "platea-orders-57da6.firebaseapp.com",
+    projectId: "platea-orders-57da6",
+    storageBucket: "platea-orders-57da6.firebasestorage.app",
+    messagingSenderId: "116324224557",
+    appId: "1:116324224557:web:7c3f793e3e82f9dad672a4"
+  });
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+
+  const $ = (id) => document.getElementById(id);
+  const show = (view) => {
+    $("loginView").hidden = view !== "loginView";
+    $("homeView").hidden = view !== "homeView";
+  };
+
+  $("loginForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    $("error").textContent = "";
+    $("signIn").disabled = true;
+    try {
+      await signInWithEmailAndPassword(auth, $("email").value.trim(), $("password").value);
+    } catch (err) {
+      const wrong = ["auth/invalid-credential", "auth/wrong-password", "auth/user-not-found", "auth/invalid-email"];
+      $("error").textContent = wrong.includes(err.code)
+        ? "Wrong email or password."
+        : "Could not sign in (" + err.code + ").";
+    }
+    $("signIn").disabled = false;
+  });
+
+  $("signOut").addEventListener("click", () => signOut(auth));
+
+  onAuthStateChanged(auth, async (user) => {
+    if (!user) return show("loginView");
+    try {
+      const snap = await getDoc(doc(db, "users", user.uid));
+      const profile = snap.exists() ? snap.data() : null;
+      if (!profile || profile.active !== true) throw new Error("not-set-up");
+      $("who").textContent = profile.name;
+      $("role").textContent = profile.role;
+      show("homeView");
+    } catch (err) {
+      await signOut(auth);
+      $("error").textContent = "This account isn’t set up yet. Ask the admin to add it.";
+      show("loginView");
+    }
+  });
+</script>
+</body>
+</html>
