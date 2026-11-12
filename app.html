@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="el">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Τραπέζια · Platea Orders</title>
+<style>
+  :root { --night:#16213a; --paper:#f6f7f4; --ink:#1b1f2a; --muted:#5e6573; --red:#c8302b; --line:#cfd3da; }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; padding: 12px 12px 110px; background: var(--night); color: var(--ink);
+    font: 17px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 16px; background: var(--paper); border-radius: 6px; min-height: 60vh; }
+  header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+  header div { display: flex; gap: 6px; }
+  h1 { margin: 0; font-size: 26px; font-weight: 800; letter-spacing: -0.02em; }
+  h2 { margin: 18px 0 4px; font-size: 18px; }
+  button, a.btn { display: inline-flex; align-items: center; justify-content: center; min-height: 46px; padding: 0 14px;
+    font: inherit; font-weight: 700; color: #fff; background: var(--red); border: 0; border-radius: 6px;
+    text-decoration: none; cursor: pointer; }
+  button:disabled { opacity: 0.45; cursor: default; }
+  button.quiet, a.btn.quiet { color: var(--ink); background: transparent; border: 1.5px solid var(--line); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+  .grid button { flex-direction: column; min-height: 84px; font-size: 20px; color: var(--ink); background: #fff; border: 1.5px solid var(--line); }
+  .grid button small { font-size: 14px; font-weight: 600; }
+  .grid button.busy { color: #fff; background: var(--red); border-color: var(--red); }
+  .chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 6px; }
+  .chips button { white-space: nowrap; }
+  .chips button.on { color: #fff; background: var(--night); border-color: var(--night); }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 0; border-top: 1px solid var(--line); }
+  .nm { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .nm small { display: block; color: var(--muted); }
+  .nm button { min-height: 36px; margin-top: 6px; padding: 0 10px; font-size: 15px; }
+  .sent { color: var(--muted); }
+  .qty { display: flex; align-items: center; gap: 8px; }
+  .qty button { min-width: 44px; padding: 0; }
+  .off { color: var(--muted); text-decoration: line-through; }
+  .muted { color: var(--muted); }
+  #bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); background: var(--night); }
+  #bar button { display: flex; width: 100%; max-width: 640px; min-height: 54px; margin: 0 auto; }
+  :focus-visible { outline: 3px solid var(--night); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<main id="page" hidden><section id="view"></section></main>
+<div id="bar" hidden></div>
+
+<script type="module">
+  import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+  import { collection, doc, getDoc, onSnapshot, query, where, writeBatch, serverTimestamp }
+    from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+  import { auth, db } from "./firebase.js";
+
+  const $ = (id) => document.getElementById(id);
+  const h = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };
+  const money = (n) => Number(n || 0).toFixed(2).replace(".", ",") + " €";
+  const byName = (a, b) => a.name.localeCompare(b.name, "el", { numeric: true });
+  const sum = (items) => Math.round(items.reduce((s, l) => s + l.price * l.qty, 0) * 100) / 100;
+
+  const st = { me: null, tables: [], categories: [], items: [], orders: [] };
+  let view = { name: "tables" };
+  const openOrder = (t) => st.orders.find((o) => o.tableId === t.id);
+  const go = (v) => { view = v; render(); };
+
+  function tablesView() {
+    $("bar").hidden = true;
+    const tools = h("div", {},
+      ...(st.me.role === "admin" ? [h("a", { className: "btn quiet", href: "admin.html", textContent: "Διαχείριση" })] : []),
+      h("button", { className: "quiet", textContent: "Αποσύνδεση", onclick: () => signOut(auth) }));
+    const tables = [...st.tables].sort(byName);
+    return [
+      h("header", {}, h("h1", { textContent: "Τραπέζια" }), tools),
+      tables.length
+        ? h("div", { className: "grid" }, ...tables.map((t) => {
+            const o = openOrder(t);
+            return h("button", { className: o ? "busy" : "", onclick: () => go({ name: "order", tableId: t.id, catId: null, cart: [] }) },
+              t.name, h("small", { textContent: o ? money(o.total) : "Ελεύθερο" }));
+          }))
+        : h("p", { className: "muted", textContent: "Δεν υπάρχουν τραπέζια. Πρόσθεσέ τα από τη Διαχείριση." })
+    ];
+  }
+
+  function orderView() {
+    const t = st.tables.find((x) => x.id === view.tableId);
+    if (!t) { view = { name: "tables" }; return tablesView(); }
+    const o = openOrder(t);
+    const cart = view.cart;
+    const cats = [...st.categories].sort((a, b) => a.order - b.order);
+    if (!view.catId && cats.length) view.catId = cats[0].id;
+
+    const out = [h("header", {}, h("h1", { textContent: t.name }), h("button", { className: "quiet", textContent: "Πίσω", onclick: () => go({ name: "tables" }) }))];
+
+    if (o) {
+      out.push(h("h2", { textContent: "Έχουν σταλεί · " + money(o.total) }));
+      for (const l of o.items) {
+        out.push(h("div", { className: "row sent" },
+          h("div", { className: "nm", textContent: l.qty + "× " + l.name + (l.note ? " (" + l.note + ")" : "") }),
+          h("span", { textContent: money(l.price * l.qty) })));
+      }
+      out.push(h("button", { className: "quiet", textContent: "Κλείσιμο τραπεζιού", onclick: () => closeTable(t, o) }));
+    }
+
+    out.push(h("h2", { textContent: "Νέα παραγγελία" }));
+    out.push(h("div", { className: "chips" }, ...cats.map((c) =>
+      h("button", { className: "quiet" + (c.id === view.catId ? " on" : ""), textContent: c.name, onclick: () => { view.catId = c.id; render(); } }))));
+    for (const i of st.items.filter((x) => x.categoryId === view.catId).sort(byName)) {
+      const off = i.available === false;
+      out.push(h("div", { className: "row" },
+        h("div", { className: "nm" }, h("span", { className: off ? "off" : "", textContent: i.name }), h("small", { textContent: off ? "Εξαντλήθηκε" : money(i.price) })),
+        h("button", { textContent: "+", disabled: off, onclick: () => {
+          const l = cart.find((x) => x.id === i.id && !x.note);
+          if (l) l.qty++; else cart.push({ id: i.id, name: i.name, price: i.price, qty: 1, note: "" });
+          render();
+        } })));
+    }
+
+    if (cart.length) {
+      out.push(h("h2", { textContent: "Στο καλάθι" }));
+      for (const l of cart) {
+        out.push(h("div", { className: "row" },
+          h("div", { className: "nm" }, l.name, l.note ? h("small", { textContent: l.note }) : "",
+            h("button", { className: "quiet", textContent: l.note ? "Αλλαγή σημείωσης" : "Σημείωση", onclick: () => {
+              const n = prompt("Σημείωση (π.χ. χωρίς κρεμμύδι)", l.note || "");
+              if (n !== null) { l.note = n.trim(); render(); }
+            } })),
+          h("div", { className: "qty" },
+            h("button", { className: "quiet", textContent: "−", onclick: () => { l.qty--; if (l.qty <= 0) cart.splice(cart.indexOf(l), 1); render(); } }),
+            h("b", { textContent: String(l.qty) }),
+            h("button", { textContent: "+", onclick: () => { l.qty++; render(); } }))));
+      }
+    }
+
+    const bar = $("bar");
+    bar.hidden = !cart.length;
+    bar.replaceChildren(h("button", { textContent: "Αποστολή στην κουζίνα · " + money(sum(cart)), onclick: (e) => send(t, o, e.target) }));
+    return out;
+  }
+
+  async function send(t, o, button) {
+    const cart = view.cart;
+    if (!cart.length) return;
+    button.disabled = true;
+    button.textContent = "Αποστολή…";
+    const items = [...(o ? o.items : []), ...cart.map(({ name, price, qty, note }) => ({ name, price, qty, note }))];
+    const ref = o ? doc(db, "orders", o.id) : doc(collection(db, "orders"));
+    const b = writeBatch(db);
+    if (o) b.update(ref, { items, total: sum(items) });
+    else b.set(ref, { items, total: sum(items), tableId: t.id, tableName: t.name, waiterId: st.me.uid, waiterName: st.me.name, status: "open", createdAt: serverTimestamp() });
+    b.update(doc(db, "tables", t.id), { status: "busy", orderId: ref.id });
+    b.set(doc(collection(db, "printJobs")), {
+      orderId: ref.id, tableName: t.name, waiterName: st.me.name, status: "pending", createdAt: serverTimestamp(),
+      lines: cart.map(({ qty, name, note }) => ({ qty, name, note }))
+    });
+    try { await b.commit(); go({ name: "tables" }); }
+    catch (e) { alert("Η παραγγελία δεν στάλθηκε: " + (e.code || e.message)); render(); }
+  }
+
+  async function closeTable(t, o) {
+    if (!confirm("Κλείσιμο τραπεζιού " + t.name + " (" + money(o.total) + ");")) return;
+    const b = writeBatch(db);
+    b.update(doc(db, "orders", o.id), { status: "paid", closedAt: serverTimestamp() });
+    b.update(doc(db, "tables", t.id), { status: "free", orderId: null });
+    try { await b.commit(); go({ name: "tables" }); }
+    catch (e) { alert("Κάτι πήγε στραβά: " + (e.code || e.message)); }
+  }
+
+  function render() { $("view").replaceChildren(...(view.name === "order" ? orderView() : tablesView())); }
+
+  onAuthStateChanged(auth, async (user) => {
+    if (!user) return location.replace("index.html");
+    try {
+      const p = (await getDoc(doc(db, "users", user.uid))).data();
+      if (!p || p.active !== true || !["admin", "waiter"].includes(p.role)) throw new Error("no-access");
+      st.me = { uid: user.uid, name: p.name, role: p.role };
+    } catch (e) {
+      alert("Δεν έχεις πρόσβαση σε αυτή τη σελίδα.");
+      return location.replace("index.html");
+    }
+    const sub = (key, q) => onSnapshot(q, (s) => {
+      st[key] = s.docs.map((d) => ({ id: d.id, ...d.data() }));
+      render();
+    }, (e) => { if (auth.currentUser) console.error(e); });
+    sub("tables", collection(db, "tables"));
+    sub("categories", collection(db, "categories"));
+    sub("items", collection(db, "menuItems"));
+    sub("orders", query(collection(db, "orders"), where("status", "==", "open")));
+    $("page").hidden = false;
+  });
+</script>
+</body>
+</html>
