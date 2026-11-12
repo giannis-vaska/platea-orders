@@ -25,7 +25,7 @@
   button, a.btn { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 52px;
     margin: 0 0 12px; font: inherit; font-weight: 700; color: #fff; background: var(--red);
     border: 0; border-radius: 6px; text-decoration: none; cursor: pointer; }
-  button.quiet { color: var(--ink); background: transparent; border: 1.5px solid var(--line); }
+  button.quiet, a.btn.quiet { color: var(--ink); background: transparent; border: 1.5px solid var(--line); }
   button:disabled { opacity: 0.6; cursor: default; }
   :focus-visible { outline: 3px solid var(--night); outline-offset: 2px; }
   #error { min-height: 1.45em; margin: 0 0 12px; color: var(--red); font-weight: 600; }
@@ -49,8 +49,9 @@
 
   <section id="homeView" hidden>
     <h1>Γεια σου, <span id="who"></span></h1>
-    <p>Συνδέθηκες ως <strong id="role"></strong>. Τα τραπέζια και οι παραγγελίες έρχονται στη συνέχεια.</p>
-    <a id="adminLink" class="btn" href="admin.html" hidden>Διαχείριση</a>
+    <p>Συνδέθηκες ως <strong id="role"></strong>.</p>
+    <a class="btn" href="app.html">Τραπέζια</a>
+    <a id="adminLink" class="btn quiet" href="admin.html" hidden>Διαχείριση</a>
     <button id="signOut" class="quiet" type="button">Αποσύνδεση</button>
   </section>
 </main>
