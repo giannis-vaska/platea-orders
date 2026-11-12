@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="el">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Διαχείριση · Platea Orders</title>
+<style>
+  :root { --night:#16213a; --paper:#f6f7f4; --ink:#1b1f2a; --muted:#5e6573; --red:#c8302b; --line:#cfd3da; }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; padding: 16px 12px 48px; background: var(--night); color: var(--ink);
+    font: 17px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 20px 16px 24px; background: var(--paper); border-radius: 6px; }
+  header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; }
+  h1 { margin: 0; font-size: 26px; font-weight: 800; letter-spacing: -0.02em; }
+  h2 { margin: 20px 0 2px; font-size: 18px; }
+  button, input, select { font: inherit; min-height: 46px; border-radius: 6px; }
+  input, select { width: 100%; padding: 8px 10px; color: var(--ink); background: #fff; border: 1.5px solid var(--line); }
+  button { padding: 0 14px; color: #fff; background: var(--red); border: 0; font-weight: 700; cursor: pointer; }
+  button.quiet { color: var(--ink); background: transparent; border: 1.5px solid var(--line); }
+  nav { display: flex; gap: 6px; margin-bottom: 16px; }
+  nav button { flex: 1; padding: 0 6px; }
+  nav button[aria-selected="true"] { color: #fff; background: var(--night); border-color: var(--night); }
+  form { display: grid; gap: 8px; margin-bottom: 8px; }
+  .row { padding: 10px 0; border-top: 1px solid var(--line); }
+  .top { display: flex; justify-content: space-between; gap: 8px; overflow-wrap: anywhere; }
+  .price { font-weight: 700; white-space: nowrap; }
+  .actions { display: flex; gap: 6px; margin-top: 8px; }
+  .actions button { min-height: 40px; padding: 0 12px; }
+  .off { color: var(--muted); text-decoration: line-through; }
+  .empty { color: var(--muted); }
+  :focus-visible { outline: 3px solid var(--night); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<main id="page" hidden>
+  <header>
+    <h1>Διαχείριση</h1>
+    <button id="out" class="quiet" type="button">Αποσύνδεση</button>
+  </header>
+  <nav id="tabs"></nav>
+  <section id="view"></section>
+</main>
+
+<script type="module">
+  import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+  import { collection, doc, getDoc, addDoc, updateDoc, deleteDoc, onSnapshot }
+    from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+  import { auth, db } from "./firebase.js";
+
+  const TABS = [["categories", "Κατηγορίες"], ["menuItems", "Προϊόντα"], ["tables", "Τραπέζια"]];
+  const state = { categories: [], menuItems: [], tables: [] };
+  let tab = "categories";
+
+  const $ = (id) => document.getElementById(id);
+  const h = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };
+  const money = (n) => Number(n).toFixed(2).replace(".", ",") + " €";
+  const parsePrice = (s) => { const n = parseFloat(String(s).replace(",", ".")); return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null; };
+  const byName = (a, b) => a.name.localeCompare(b.name, "el", { numeric: true });
+  const fail = (e) => alert("Κάτι πήγε στραβά: " + (e.code || e.message));
+  const run = (p) => p.catch(fail);
+  const add = (c, data) => run(addDoc(collection(db, c), data));
+  const upd = (c, id, data) => run(updateDoc(doc(db, c, id), data));
+  const del = (c, id) => run(deleteDoc(doc(db, c, id)));
+
+  const btn = (label, onclick, cls = "quiet") => h("button", { type: "button", textContent: label, className: cls, onclick });
+  const field = (placeholder, price) => h("input", { placeholder, required: true, ...(price ? { inputMode: "decimal" } : {}) });
+  const empty = (text) => h("p", { className: "empty", textContent: text });
+  const row = (nameEl, priceText, actions) =>
+    h("div", { className: "row" }, h("div", { className: "top" }, nameEl, h("span", { className: "price", textContent: priceText })), h("div", { className: "actions" }, ...actions));
+  function makeForm(fields, onSubmit) {
+    const f = h("form", {}, ...fields, h("button", { type: "submit", textContent: "Προσθήκη" }));
+    f.onsubmit = (e) => { e.preventDefault(); onSubmit(...fields.map((x) => x.value.trim())); f.reset(); };
+    return f;
+  }
+
+  function categoriesView() {
+    const cats = [...state.categories].sort((a, b) => a.order - b.order);
+    return [
+      makeForm([field("Νέα κατηγορία")], (name) => add("categories", { name, order: Date.now() })),
+      ...(cats.length ? cats.map((c) => row(h("span", { textContent: c.name }), "", [
+        btn("Αλλαγή", () => { const n = (prompt("Όνομα κατηγορίας", c.name) || "").trim(); if (n) upd("categories", c.id, { name: n }); }),
+        btn("Διαγραφή", () => {
+          if (state.menuItems.some((i) => i.categoryId === c.id)) return alert("Η κατηγορία έχει προϊόντα. Μετακίνησέ τα ή διέγραψέ τα πρώτα.");
+          if (confirm("Διαγραφή «" + c.name + "»;")) del("categories", c.id);
+        })
+      ])) : [empty("Δεν υπάρχουν κατηγορίες ακόμα. Πρόσθεσε την πρώτη.")])
+    ];
+  }
+
+  function itemsView() {
+    const cats = [...state.categories].sort((a, b) => a.order - b.order);
+    if (!cats.length) return [empty("Φτιάξε πρώτα μια κατηγορία.")];
+    const select = h("select", {}, ...cats.map((c) => h("option", { value: c.id, textContent: c.name })));
+    const out = [makeForm([field("Όνομα προϊόντος"), field("Τιμή (€)", true), select], (name, price, categoryId) => {
+      const p = parsePrice(price);
+      if (p === null) return alert("Μη έγκυρη τιμή.");
+      add("menuItems", { name, price: p, categoryId, available: true });
+    })];
+    for (const c of cats) {
+      out.push(h("h2", { textContent: c.name }));
+      const items = state.menuItems.filter((i) => i.categoryId === c.id).sort(byName);
+      if (!items.length) out.push(empty("Κανένα προϊόν."));
+      for (const i of items) {
+        const off = i.available === false;
+        out.push(row(h("span", { textContent: i.name, className: off ? "off" : "" }), money(i.price), [
+          btn(off ? "Διαθέσιμο" : "Εξαντλήθηκε", () => upd("menuItems", i.id, { available: off })),
+          btn("Αλλαγή", () => {
+            const n = (prompt("Όνομα", i.name) || "").trim();
+            if (!n) return;
+            const p = parsePrice(prompt("Τιμή (€)", String(i.price).replace(".", ",")));
+            if (p === null) return alert("Μη έγκυρη τιμή.");
+            upd("menuItems", i.id, { name: n, price: p });
+          }),
+          btn("Διαγραφή", () => { if (confirm("Διαγραφή «" + i.name + "»;")) del("menuItems", i.id); })
+        ]));
+      }
+    }
+    return out;
+  }
+
+  function tablesView() {
+    const tables = [...state.tables].sort(byName);
+    return [
+      makeForm([field("Όνομα τραπεζιού (π.χ. 1, Βεράντα 2)")], (name) => add("tables", { name, status: "free" })),
+      ...(tables.length ? tables.map((t) => row(h("span", { textContent: t.name }), "", [
+        btn("Αλλαγή", () => { const n = (prompt("Όνομα τραπεζιού", t.name) || "").trim(); if (n) upd("tables", t.id, { name: n }); }),
+        btn("Διαγραφή", () => { if (confirm("Διαγραφή «" + t.name + "»;")) del("tables", t.id); })
+      ])) : [empty("Δεν υπάρχουν τραπέζια ακόμα. Πρόσθεσε το πρώτο.")])
+    ];
+  }
+
+  function render() {
+    $("tabs").replaceChildren(...TABS.map(([key, label]) => {
+      const b = btn(label, () => { tab = key; render(); });
+      b.setAttribute("aria-selected", String(key === tab));
+      return b;
+    }));
+    const views = { categories: categoriesView, menuItems: itemsView, tables: tablesView };
+    $("view").replaceChildren(...views[tab]());
+  }
+
+  $("out").onclick = () => signOut(auth);
+
+  onAuthStateChanged(auth, async (user) => {
+    if (!user) return location.replace("index.html");
+    try {
+      const p = (await getDoc(doc(db, "users", user.uid))).data();
+      if (!p || p.role !== "admin" || p.active !== true) throw new Error("no-access");
+    } catch (e) {
+      alert("Δεν έχεις πρόσβαση σε αυτή τη σελίδα.");
+      return location.replace("index.html");
+    }
+    $("page").hidden = false;
+    for (const c of Object.keys(state)) {
+      onSnapshot(collection(db, c), (s) => {
+        state[c] = s.docs.map((d) => ({ id: d.id, ...d.data() }));
+        render();
+      }, (e) => { if (auth.currentUser) fail(e); });
+    }
+  });
+</script>
+</body>
+</html>
