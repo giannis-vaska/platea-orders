@@ -29,6 +29,7 @@
   .actions button { min-height: 40px; padding: 0 12px; }
   .off { color: var(--muted); text-decoration: line-through; }
   .empty { color: var(--muted); }
+  .actions:empty { display: none; }
   :focus-visible { outline: 3px solid var(--night); outline-offset: 2px; }
 </style>
 </head>
@@ -45,11 +46,11 @@
 <script type="module">
   import { initializeApp, deleteApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
   import { onAuthStateChanged, signOut, getAuth, createUserWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-  import { collection, doc, getDoc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot }
+  import { collection, doc, getDoc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, getDocs, query, where }
     from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
   import { app, auth, db } from "./firebase.js";
 
-  const TABS = [["categories", "Κατηγορίες"], ["menuItems", "Προϊόντα"], ["tables", "Τραπέζια"], ["users", "Σερβιτόροι"]];
+  const TABS = [["categories", "Κατηγορίες"], ["menuItems", "Προϊόντα"], ["tables", "Τραπέζια"], ["users", "Σερβιτόροι"], ["reports", "Αναφορές"]];
   const state = { categories: [], menuItems: [], tables: [], users: [] };
   let tab = "categories";
 
@@ -161,13 +162,62 @@
     ];
   }
 
+  const DAY_START_HOUR = 6;
+  const pad = (n) => String(n).padStart(2, "0");
+  const dateStr = (d) => d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+  const businessToday = () => { const d = new Date(); if (d.getHours() < DAY_START_HOUR) d.setDate(d.getDate() - 1); return dateStr(d); };
+  let reportDate = businessToday(), report = null, reportBusy = false;
+
+  async function loadReport() {
+    reportBusy = true; render();
+    const [y, m, d] = reportDate.split("-").map(Number);
+    const start = new Date(y, m - 1, d, DAY_START_HOUR), end = new Date(y, m - 1, d + 1, DAY_START_HOUR);
+    try {
+      const snap = await getDocs(query(collection(db, "orders"), where("closedAt", ">=", start), where("closedAt", "<", end)));
+      const orders = snap.docs.map((x) => x.data()).filter((o) => o.status === "paid");
+      const byWaiter = {}, byItem = {};
+      let total = 0;
+      for (const o of orders) {
+        total += o.total;
+        const w = byWaiter[o.waiterName] || (byWaiter[o.waiterName] = { total: 0, count: 0 });
+        w.total += o.total; w.count++;
+        for (const l of o.items) {
+          const k = byItem[l.name] || (byItem[l.name] = { qty: 0, sum: 0 });
+          k.qty += l.qty; k.sum += l.price * l.qty;
+        }
+      }
+      report = { date: reportDate, count: orders.length, total, byWaiter, byItem };
+    } catch (e) { fail(e); }
+    reportBusy = false; render();
+  }
+
+  function reportsView() {
+    const date = h("input", { type: "date", value: reportDate, onchange: (e) => { reportDate = e.target.value; report = null; if (reportDate) loadReport(); } });
+    const out = [
+      h("p", { className: "empty", textContent: "Η ημέρα μετράει από τις 06:00 μέχρι τις 06:00 της επόμενης." }),
+      date,
+      h("div", { style: "margin-top:8px" }, btn(reportBusy ? "Φόρτωση…" : "Ανανέωση", loadReport))
+    ];
+    if (report && report.date === reportDate) {
+      if (!report.count) return [...out, empty("Δεν έκλεισε κανένα τραπέζι αυτή την ημέρα.")];
+      out.push(h("h2", { textContent: "Σύνολο: " + money(report.total) }), h("p", { className: "empty", textContent: report.count + " τραπέζια έκλεισαν" }));
+      out.push(h("h2", { textContent: "Ανά σερβιτόρο" }));
+      for (const [name, w] of Object.entries(report.byWaiter).sort((a, b) => b[1].total - a[1].total))
+        out.push(row(h("span", { textContent: name + " (" + w.count + ")" }), money(w.total), []));
+      out.push(h("h2", { textContent: "Προϊόντα" }));
+      for (const [name, k] of Object.entries(report.byItem).sort((a, b) => b[1].qty - a[1].qty))
+        out.push(row(h("span", { textContent: k.qty + "× " + name }), money(k.sum), []));
+    }
+    return out;
+  }
+
   function render() {
     $("tabs").replaceChildren(...TABS.map(([key, label]) => {
-      const b = btn(label, () => { tab = key; render(); });
+      const b = btn(label, () => { tab = key; if (key === "reports" && !report) loadReport(); else render(); });
       b.setAttribute("aria-selected", String(key === tab));
       return b;
     }));
-    const views = { categories: categoriesView, menuItems: itemsView, tables: tablesView, users: usersView };
+    const views = { categories: categoriesView, menuItems: itemsView, tables: tablesView, users: usersView, reports: reportsView };
     $("view").replaceChildren(...views[tab]());
   }
 
