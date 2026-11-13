@@ -36,6 +36,7 @@
   .qty button { min-width: 44px; padding: 0; }
   .off { color: var(--muted); text-decoration: line-through; }
   .muted { color: var(--muted); }
+  .pair { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
   #bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); background: var(--night); }
   #bar button { display: flex; width: 100%; max-width: 640px; min-height: 54px; margin: 0 auto; }
   :focus-visible { outline: 3px solid var(--night); outline-offset: 2px; }
@@ -47,7 +48,7 @@
 
 <script type="module">
   import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-  import { collection, doc, getDoc, onSnapshot, query, where, writeBatch, serverTimestamp }
+  import { collection, doc, getDoc, addDoc, onSnapshot, query, where, writeBatch, serverTimestamp }
     from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
   import { auth, db } from "./firebase.js";
 
@@ -97,7 +98,9 @@
           h("div", { className: "nm", textContent: l.qty + "× " + l.name + (l.note ? " (" + l.note + ")" : "") }),
           h("span", { textContent: money(l.price * l.qty) })));
       }
-      out.push(h("button", { className: "quiet", textContent: "Κλείσιμο τραπεζιού", onclick: () => closeTable(t, o) }));
+      out.push(h("div", { className: "pair" },
+        h("button", { className: "quiet", textContent: "Επανεκτύπωση", onclick: (e) => reprint(t, o, e.target) }),
+        h("button", { className: "quiet", textContent: "Κλείσιμο τραπεζιού", onclick: () => closeTable(t, o) })));
     }
 
     out.push(h("h2", { textContent: "Νέα παραγγελία" }));
@@ -142,17 +145,32 @@
     button.disabled = true;
     button.textContent = "Αποστολή…";
     const items = [...(o ? o.items : []), ...cart.map(({ name, price, qty, note }) => ({ name, price, qty, note }))];
+    const lines = cart.map(({ qty, name, note }) => ({ qty, name, note }));
     const ref = o ? doc(db, "orders", o.id) : doc(collection(db, "orders"));
     const b = writeBatch(db);
-    if (o) b.update(ref, { items, total: sum(items) });
-    else b.set(ref, { items, total: sum(items), tableId: t.id, tableName: t.name, waiterId: st.me.uid, waiterName: st.me.name, status: "open", createdAt: serverTimestamp() });
+    if (o) b.update(ref, { items, total: sum(items), lastLines: lines });
+    else b.set(ref, { items, total: sum(items), tableId: t.id, tableName: t.name, waiterId: st.me.uid, waiterName: st.me.name, status: "open", lastLines: lines, createdAt: serverTimestamp() });
     b.update(doc(db, "tables", t.id), { status: "busy", orderId: ref.id });
     b.set(doc(collection(db, "printJobs")), {
       orderId: ref.id, tableName: t.name, waiterName: st.me.name, status: "pending", createdAt: serverTimestamp(),
-      lines: cart.map(({ qty, name, note }) => ({ qty, name, note }))
+      lines
     });
     try { await b.commit(); go({ name: "tables" }); }
     catch (e) { alert("Η παραγγελία δεν στάλθηκε: " + (e.code || e.message)); render(); }
+  }
+
+  async function reprint(t, o, button) {
+    if (!confirm("Επανεκτύπωση του τελευταίου δελτίου;")) return;
+    button.disabled = true;
+    try {
+      await addDoc(collection(db, "printJobs"), {
+        orderId: o.id, tableName: t.name, waiterName: "ΕΠΑΝΕΚΤΥΠΩΣΗ - " + st.me.name, reprint: true,
+        status: "pending", createdAt: serverTimestamp(),
+        lines: o.lastLines || o.items.map(({ qty, name, note }) => ({ qty, name, note }))
+      });
+      alert("Στάλθηκε για εκτύπωση.");
+    } catch (e) { alert("Κάτι πήγε στραβά: " + (e.code || e.message)); }
+    button.disabled = false;
   }
 
   async function closeTable(t, o) {
