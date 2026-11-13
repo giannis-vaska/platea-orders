@@ -38,8 +38,8 @@
     <h1>Platea Orders</h1>
     <p>Συνδέσου για να παίρνεις παραγγελίες.</p>
     <form id="loginForm">
-      <label for="email">Email</label>
-      <input id="email" type="email" autocomplete="username" required>
+      <label for="email">Email ή όνομα χρήστη</label>
+      <input id="email" type="text" inputmode="email" autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="username" required>
       <label for="password">Κωδικός</label>
       <input id="password" type="password" autocomplete="current-password" required>
       <div id="error" role="alert"></div>
@@ -74,7 +74,8 @@
     $("error").textContent = "";
     $("signIn").disabled = true;
     try {
-      await signInWithEmailAndPassword(auth, $("email").value.trim(), $("password").value);
+      const id = $("email").value.trim().toLowerCase();
+      await signInWithEmailAndPassword(auth, id.includes("@") ? id : id + "@platea-orders.app", $("password").value);
     } catch (err) {
       const wrong = ["auth/invalid-credential", "auth/wrong-password", "auth/user-not-found", "auth/invalid-email"];
       $("error").textContent = wrong.includes(err.code)
