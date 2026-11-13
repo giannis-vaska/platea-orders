@@ -18,8 +18,8 @@
   input, select { width: 100%; padding: 8px 10px; color: var(--ink); background: #fff; border: 1.5px solid var(--line); }
   button { padding: 0 14px; color: #fff; background: var(--red); border: 0; font-weight: 700; cursor: pointer; }
   button.quiet { color: var(--ink); background: transparent; border: 1.5px solid var(--line); }
-  nav { display: flex; gap: 6px; margin-bottom: 16px; }
-  nav button { flex: 1; padding: 0 6px; }
+  nav { display: flex; gap: 6px; margin-bottom: 16px; overflow-x: auto; }
+  nav button { flex: 1 0 auto; padding: 0 10px; }
   nav button[aria-selected="true"] { color: #fff; background: var(--night); border-color: var(--night); }
   form { display: grid; gap: 8px; margin-bottom: 8px; }
   .row { padding: 10px 0; border-top: 1px solid var(--line); }
@@ -43,13 +43,14 @@
 </main>
 
 <script type="module">
-  import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-  import { collection, doc, getDoc, addDoc, updateDoc, deleteDoc, onSnapshot }
+  import { initializeApp, deleteApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+  import { onAuthStateChanged, signOut, getAuth, createUserWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+  import { collection, doc, getDoc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot }
     from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-  import { auth, db } from "./firebase.js";
+  import { app, auth, db } from "./firebase.js";
 
-  const TABS = [["categories", "Κατηγορίες"], ["menuItems", "Προϊόντα"], ["tables", "Τραπέζια"]];
-  const state = { categories: [], menuItems: [], tables: [] };
+  const TABS = [["categories", "Κατηγορίες"], ["menuItems", "Προϊόντα"], ["tables", "Τραπέζια"], ["users", "Σερβιτόροι"]];
+  const state = { categories: [], menuItems: [], tables: [], users: [] };
   let tab = "categories";
 
   const $ = (id) => document.getElementById(id);
@@ -130,13 +131,43 @@
     ];
   }
 
+  const DOMAIN = "@platea-orders.app";
+  const ROLES = { admin: "διαχειριστής", waiter: "σερβιτόρος", printer: "εκτυπωτής" };
+
+  async function createWaiter(name, username, password) {
+    username = username.toLowerCase();
+    if (!/^[a-z0-9._-]{3,}$/.test(username)) return alert("Όνομα χρήστη: τουλάχιστον 3 λατινικοί χαρακτήρες ή αριθμοί, χωρίς κενά.");
+    if (password.length < 6) return alert("Ο κωδικός πρέπει να έχει τουλάχιστον 6 χαρακτήρες.");
+    const second = initializeApp(app.options, "secondary");
+    try {
+      const cred = await createUserWithEmailAndPassword(getAuth(second), username + DOMAIN, password);
+      await setDoc(doc(db, "users", cred.user.uid), { name, role: "waiter", active: true, username });
+    } catch (e) {
+      alert(e.code === "auth/email-already-in-use" ? "Αυτό το όνομα χρήστη υπάρχει ήδη." : "Κάτι πήγε στραβά: " + (e.code || e.message));
+    } finally {
+      await deleteApp(second);
+    }
+  }
+
+  function usersView() {
+    const users = [...state.users].sort(byName);
+    return [
+      makeForm([field("Όνομα σερβιτόρου"), field("Όνομα χρήστη (λατινικά, π.χ. maria)"), field("Κωδικός (τουλάχιστον 6 χαρακτήρες)")], createWaiter),
+      ...users.map((u) => row(h("span", { textContent: u.name }), (ROLES[u.role] || u.role) + (u.active ? "" : " · ανενεργός"),
+        u.role !== "waiter" ? [] : [
+          btn("Αλλαγή", () => { const n = (prompt("Όνομα", u.name) || "").trim(); if (n) upd("users", u.id, { name: n }); }),
+          btn(u.active ? "Απενεργοποίηση" : "Ενεργοποίηση", () => upd("users", u.id, { active: !u.active }))
+        ]))
+    ];
+  }
+
   function render() {
     $("tabs").replaceChildren(...TABS.map(([key, label]) => {
       const b = btn(label, () => { tab = key; render(); });
       b.setAttribute("aria-selected", String(key === tab));
       return b;
     }));
-    const views = { categories: categoriesView, menuItems: itemsView, tables: tablesView };
+    const views = { categories: categoriesView, menuItems: itemsView, tables: tablesView, users: usersView };
     $("view").replaceChildren(...views[tab]());
   }
 
