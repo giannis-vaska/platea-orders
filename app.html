@@ -50,7 +50,7 @@
   .cats button.on { color: #fff; background: var(--night); border-color: var(--night); }
   .items .row:first-child { padding-top: 0; border-top: 0; }
   #modal { position: fixed; inset: 0; z-index: 10; display: flex; align-items: flex-end; justify-content: center; padding: 12px; background: rgba(10, 15, 30, 0.7); }
-  #modal .card { width: 100%; max-width: 420px; padding: 20px 16px; background: var(--paper); border-radius: 10px; }
+  #modal .card { width: 100%; max-width: 420px; max-height: 88vh; overflow-y: auto; padding: 20px 16px; background: var(--paper); border-radius: 10px; }
   #modal h2 { margin: 0 0 8px; }
   #modal p { margin: 0 0 8px; }
   .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
@@ -86,6 +86,42 @@
   const openOrder = (t) => st.orders.find((o) => o.tableId === t.id);
   const go = (v) => { view = v; render(); };
 
+  const extrasText = (ex) => ex.map((e) => (e.qty > 1 ? e.qty + "x " : "") + e.name).join(", ");
+
+  function addLine(i, extras) {
+    const key = i.id + "|" + extras.map((e) => e.name + "x" + e.qty).join(",");
+    const unit = Math.round((i.price + extras.reduce((s, e) => s + e.price * e.qty, 0)) * 100) / 100;
+    const l = view.cart.find((x) => x.key === key && !x.note);
+    if (l) l.qty++;
+    else view.cart.push({ key, id: i.id, name: i.name, price: unit, qty: 1, note: "", extras, cat: (st.categories.find((c) => c.id === i.categoryId) || {}).name || "" });
+    render();
+  }
+
+  function extrasChooser(i, onDone) {
+    const modal = $("modal");
+    const counts = i.extras.map(() => 0);
+    const add = h("button", { className: "wide" });
+    const refresh = () => { add.textContent = "Προσθήκη · " + money(i.price + i.extras.reduce((s, e, k) => s + e.price * counts[k], 0)); };
+    const rows = i.extras.map((e, k) => {
+      const n = h("b", { textContent: "0" });
+      const bump = (d) => { counts[k] = Math.max(0, counts[k] + d); n.textContent = String(counts[k]); refresh(); };
+      return h("div", { className: "row" },
+        h("div", { className: "nm" }, e.name, h("small", { textContent: e.price ? "+" + money(e.price) : "Δωρεάν" })),
+        h("div", { className: "qty" },
+          h("button", { className: "quiet", textContent: "−", onclick: () => bump(-1) }), n,
+          h("button", { textContent: "+", onclick: () => bump(1) })));
+    });
+    add.onclick = () => {
+      modal.hidden = true;
+      onDone(i.extras.map((e, k) => ({ name: e.name, price: e.price, qty: counts[k] })).filter((e) => e.qty > 0));
+    };
+    refresh();
+    modal.replaceChildren(h("div", { className: "card" },
+      h("h2", { textContent: i.name }), ...rows, add,
+      h("button", { className: "quiet wide", textContent: "Άκυρο", onclick: () => { modal.hidden = true; } })));
+    modal.hidden = false;
+  }
+
   function tablesView() {
     $("bar").hidden = true;
     const tools = h("div", {},
@@ -118,7 +154,7 @@
       out.push(h("h2", { textContent: "Έχουν σταλεί · " + money(o.total) }));
       for (const l of o.items) {
         out.push(h("div", { className: "row sent" },
-          h("div", { className: "nm", textContent: l.qty + "× " + l.name + (l.note ? " (" + l.note + ")" : "") }),
+          h("div", { className: "nm", textContent: l.qty + "× " + l.name + (l.extras && l.extras.length ? " + " + extrasText(l.extras) : "") + (l.note ? " (" + l.note + ")" : "") }),
           h("span", { textContent: money(l.price * l.qty) })));
       }
       out.push(h("div", { className: "pair" },
@@ -135,11 +171,7 @@
       const off = i.available === false;
       itemCol.append(h("div", { className: "row" },
         h("div", { className: "nm" }, h("span", { className: off ? "off" : "", textContent: i.name }), h("small", { textContent: off ? "Εξαντλήθηκε" : money(i.price) })),
-        h("button", { textContent: "+", disabled: off, onclick: () => {
-          const l = cart.find((x) => x.id === i.id && !x.note);
-          if (l) l.qty++; else cart.push({ id: i.id, name: i.name, price: i.price, qty: 1, note: "", cat: (st.categories.find((c) => c.id === i.categoryId) || {}).name || "" });
-          render();
-        } })));
+        h("button", { textContent: "+", disabled: off, onclick: () => (i.extras && i.extras.length ? extrasChooser(i, (ex) => addLine(i, ex)) : addLine(i, [])) })));
     }
     if (!itemCol.children.length) itemCol.append(h("p", { className: "muted", textContent: "Κανένα προϊόν." }));
     out.push(h("div", { className: "menu" }, catCol, itemCol));
@@ -148,7 +180,7 @@
       out.push(h("h2", { textContent: "Στο καλάθι" }));
       for (const l of cart) {
         out.push(h("div", { className: "row" },
-          h("div", { className: "nm" }, l.name, l.note ? h("small", { textContent: l.note }) : "",
+          h("div", { className: "nm" }, l.name, l.extras && l.extras.length ? h("small", { textContent: "+ " + extrasText(l.extras) }) : "", l.note ? h("small", { textContent: l.note }) : "",
             h("button", { className: "quiet", textContent: l.note ? "Αλλαγή σημείωσης" : "Σημείωση", onclick: () => {
               const n = prompt("Σημείωση (π.χ. χωρίς κρεμμύδι)", l.note || "");
               if (n !== null) { l.note = n.trim(); render(); }
@@ -171,8 +203,8 @@
     if (!cart.length) return;
     button.disabled = true;
     button.textContent = "Αποστολή…";
-    const items = [...(o ? o.items : []), ...cart.map(({ name, price, qty, note, cat }) => ({ name, price, qty, note, cat: cat || "" }))];
-    const lines = cart.map(({ qty, name, note }) => ({ qty, name, note }));
+    const items = [...(o ? o.items : []), ...cart.map(({ name, price, qty, note, cat, extras }) => ({ name, price, qty, note, cat: cat || "", extras: extras || [] }))];
+    const lines = cart.map(({ qty, name, note, extras }) => ({ qty, name, note: [extras && extras.length ? "+ " + extrasText(extras) : "", note].filter(Boolean).join(" | ") }));
     const ref = o ? doc(db, "orders", o.id) : doc(collection(db, "orders"));
     const b = writeBatch(db);
     if (o) b.update(ref, { items, total: sum(items), lastLines: lines });
@@ -203,7 +235,7 @@
   const billJob = (t, o, payment) => ({
     type: "bill", orderId: o.id, tableName: t.name, waiterName: o.waiterName || st.me.name,
     status: "receipt", createdAt: serverTimestamp(), total: o.total, payment: payment || null,
-    items: o.items.map(({ qty, name, price, note }) => ({ qty, name, price, note: note || "" }))
+    items: o.items.map(({ qty, name, price, note, extras }) => ({ qty, name, price, note: note || "", extras: extras || [] }))
   });
 
   async function printBill(t, o, button) {
