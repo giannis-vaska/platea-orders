@@ -25,12 +25,19 @@
   .row { padding: 10px 0; border-top: 1px solid var(--line); }
   .top { display: flex; justify-content: space-between; gap: 8px; overflow-wrap: anywhere; }
   .price { font-weight: 700; white-space: nowrap; }
-  .actions { display: flex; gap: 6px; margin-top: 8px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
   .actions button { min-height: 40px; padding: 0 12px; }
   .off { color: var(--muted); text-decoration: line-through; }
   .empty { color: var(--muted); }
   .actions:empty { display: none; }
   button:disabled { opacity: 0.4; cursor: default; }
+  .cathead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 20px; }
+  .cathead h2 { margin: 0; }
+  .cathead button { min-height: 38px; padding: 0 10px; font-size: 15px; }
+  #modal { position: fixed; inset: 0; z-index: 10; display: flex; align-items: flex-end; justify-content: center; padding: 12px; background: rgba(10, 15, 30, 0.7); }
+  #modal .card { width: 100%; max-width: 480px; max-height: 88vh; overflow-y: auto; padding: 18px 16px; background: var(--paper); border-radius: 10px; }
+  #modal h2 { margin: 0 0 8px; font-size: 18px; }
+  textarea { width: 100%; margin-bottom: 8px; padding: 10px; font: inherit; color: var(--ink); background: #fff; border: 1.5px solid var(--line); border-radius: 6px; }
   :focus-visible { outline: 3px solid var(--night); outline-offset: 2px; }
 </style>
 </head>
@@ -43,11 +50,12 @@
   <nav id="tabs"></nav>
   <section id="view"></section>
 </main>
+<div id="modal" hidden></div>
 
 <script type="module">
   import { initializeApp, deleteApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
   import { onAuthStateChanged, signOut, getAuth, createUserWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-  import { collection, doc, getDoc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, getDocs, query, where }
+  import { collection, doc, getDoc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, getDocs, query, where, writeBatch }
     from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
   import { app, auth, db } from "./firebase.js";
 
@@ -78,6 +86,37 @@
     return f;
   }
 
+  const parseExtras = (txt) => txt.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => {
+    const m = l.match(/^(.*?)[\s:;,]+(\d+(?:[.,]\d+)?)\s*€?$/);
+    return { name: (m ? m[1] : l).trim(), price: (m && parsePrice(m[2])) || 0 };
+  }).filter((e) => e.name);
+  const extrasToText = (ex) => (ex || []).map((e) => e.name + (e.price ? " " + String(e.price).replace(".", ",") : "")).join("\n");
+
+  function extrasEditor(title, text, onSave) {
+    const modal = $("modal");
+    const ta = h("textarea", { rows: 8, value: text, placeholder: "Σάλτσα 0,50\nΠατάτες 1\nΝτομάτα" });
+    const close = () => { modal.hidden = true; };
+    modal.replaceChildren(h("div", { className: "card" },
+      h("h2", { textContent: title }),
+      h("p", { className: "empty", textContent: "Ένα extra ανά γραμμή. Το τελευταίο νούμερο είναι η τιμή (χωρίς νούμερο = δωρεάν)." }),
+      ta,
+      h("div", { className: "actions" },
+        btn("Αποθήκευση", () => { if (onSave(parseExtras(ta.value)) !== false) close(); }, ""),
+        btn("Άκυρο", close))));
+    modal.hidden = false;
+  }
+
+  function categoryExtras(c) {
+    const items = state.menuItems.filter((i) => i.categoryId === c.id);
+    if (!items.length) return alert("Η κατηγορία δεν έχει προϊόντα.");
+    extrasEditor("Extras για όλη την κατηγορία: " + c.name, "", (ex) => {
+      if (!confirm("Θα αντικατασταθούν τα extras σε " + items.length + " προϊόντα. Συνέχεια;")) return false;
+      const b = writeBatch(db);
+      for (const i of items) b.update(doc(db, "menuItems", i.id), { extras: ex });
+      return run(b.commit());
+    });
+  }
+
   function categoriesView() {
     const cats = [...state.categories].sort((a, b) => a.order - b.order);
     return [
@@ -104,13 +143,14 @@
       add("menuItems", { name, price: p, categoryId, available: true });
     })];
     for (const c of cats) {
-      out.push(h("h2", { textContent: c.name }));
+      out.push(h("div", { className: "cathead" }, h("h2", { textContent: c.name }), btn("Extras κατηγορίας", () => categoryExtras(c))));
       const items = state.menuItems.filter((i) => i.categoryId === c.id).sort(byName);
       if (!items.length) out.push(empty("Κανένα προϊόν."));
       for (const i of items) {
         const off = i.available === false;
         out.push(row(h("span", { textContent: i.name, className: off ? "off" : "" }), money(i.price), [
           btn(off ? "Διαθέσιμο" : "Εξαντλήθηκε", () => upd("menuItems", i.id, { available: off })),
+          btn("Extras" + (i.extras && i.extras.length ? " (" + i.extras.length + ")" : ""), () => extrasEditor("Extras: " + i.name, extrasToText(i.extras), (ex) => upd("menuItems", i.id, { extras: ex }))),
           btn("Αλλαγή", () => {
             const n = (prompt("Όνομα", i.name) || "").trim();
             if (!n) return;
