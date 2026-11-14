@@ -49,6 +49,15 @@
   .cats button { justify-content: flex-start; min-height: 52px; padding: 8px 10px; font-size: 16px; text-align: left; white-space: normal; overflow-wrap: anywhere; }
   .cats button.on { color: #fff; background: var(--night); border-color: var(--night); }
   .items .row:first-child { padding-top: 0; border-top: 0; }
+  #modal { position: fixed; inset: 0; z-index: 10; display: flex; align-items: flex-end; justify-content: center; padding: 12px; background: rgba(10, 15, 30, 0.7); }
+  #modal .card { width: 100%; max-width: 420px; padding: 20px 16px; background: var(--paper); border-radius: 10px; }
+  #modal h2 { margin: 0 0 8px; }
+  #modal p { margin: 0 0 8px; }
+  .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+  .seg button.on { color: #fff; background: var(--night); border-color: var(--night); }
+  .check { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; font-weight: 600; }
+  .check input { width: 24px; height: 24px; }
+  .wide { display: flex; width: 100%; margin-top: 8px; }
   .pair { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
   #bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); background: var(--night); }
   #bar button { display: flex; width: 100%; max-width: 640px; min-height: 54px; margin: 0 auto; }
@@ -58,6 +67,7 @@
 <body>
 <main id="page" hidden><section id="view"></section></main>
 <div id="bar" hidden></div>
+<div id="modal" hidden></div>
 
 <script type="module">
   import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
@@ -112,8 +122,9 @@
           h("span", { textContent: money(l.price * l.qty) })));
       }
       out.push(h("div", { className: "pair" },
+        h("button", { className: "quiet", textContent: "Λογαριασμός", onclick: (e) => printBill(t, o, e.target) }),
         h("button", { className: "quiet", textContent: "Επανεκτύπωση", onclick: (e) => reprint(t, o, e.target) }),
-        h("button", { className: "quiet", textContent: "Κλείσιμο τραπεζιού", onclick: () => closeTable(t, o) })));
+        h("button", { className: "quiet", textContent: "Κλείσιμο τραπεζιού", onclick: () => closeDialog(t, o) })));
     }
 
     out.push(h("h2", { textContent: "Νέα παραγγελία" }));
@@ -189,13 +200,52 @@
     button.disabled = false;
   }
 
-  async function closeTable(t, o) {
-    if (!confirm("Κλείσιμο τραπεζιού " + t.name + " (" + money(o.total) + ");")) return;
-    const b = writeBatch(db);
-    b.update(doc(db, "orders", o.id), { status: "paid", closedAt: serverTimestamp() });
-    b.update(doc(db, "tables", t.id), { status: "free", orderId: null });
-    try { await b.commit(); go({ name: "tables" }); }
-    catch (e) { alert("Κάτι πήγε στραβά: " + (e.code || e.message)); }
+  const billJob = (t, o, payment) => ({
+    type: "bill", orderId: o.id, tableName: t.name, waiterName: o.waiterName || st.me.name,
+    status: "receipt", createdAt: serverTimestamp(), total: o.total, payment: payment || null,
+    items: o.items.map(({ qty, name, price, note }) => ({ qty, name, price, note: note || "" }))
+  });
+
+  async function printBill(t, o, button) {
+    button.disabled = true;
+    try {
+      await addDoc(collection(db, "printJobs"), billJob(t, o));
+      alert("Ο λογαριασμός στάλθηκε για εκτύπωση.");
+    } catch (e) { alert("Κάτι πήγε στραβά: " + (e.code || e.message)); }
+    button.disabled = false;
+  }
+
+  function closeDialog(t, o) {
+    const modal = $("modal");
+    let method = null;
+    const done = h("button", { className: "wide", textContent: "Κλείσιμο τραπεζιού", disabled: true });
+    const seg = h("div", { className: "seg" });
+    const btns = {};
+    for (const [key, label] of [["cash", "Μετρητά"], ["card", "Κάρτα"]]) {
+      btns[key] = h("button", { className: "quiet", textContent: label, onclick: () => {
+        method = key; done.disabled = false;
+        for (const k in btns) btns[k].classList.toggle("on", k === key);
+      } });
+      seg.append(btns[key]);
+    }
+    const bill = h("input", { type: "checkbox" });
+    done.onclick = async () => {
+      done.disabled = true;
+      const b = writeBatch(db);
+      b.update(doc(db, "orders", o.id), { status: "paid", payment: method, closedAt: serverTimestamp() });
+      b.update(doc(db, "tables", t.id), { status: "free", orderId: null });
+      if (bill.checked) b.set(doc(collection(db, "printJobs")), billJob(t, o, method));
+      try { await b.commit(); modal.hidden = true; go({ name: "tables" }); }
+      catch (e) { alert("Κάτι πήγε στραβά: " + (e.code || e.message)); done.disabled = false; }
+    };
+    modal.replaceChildren(h("div", { className: "card" },
+      h("h2", { textContent: "Τραπέζι " + t.name + " · " + money(o.total) }),
+      h("p", { className: "muted", textContent: "Τρόπος πληρωμής" }),
+      seg,
+      h("label", { className: "check" }, bill, "Εκτύπωση λογαριασμού"),
+      done,
+      h("button", { className: "quiet wide", textContent: "Άκυρο", onclick: () => { modal.hidden = true; } })));
+    modal.hidden = false;
   }
 
   function render() { $("view").replaceChildren(...(view.name === "order" ? orderView() : tablesView())); }
