@@ -31,6 +31,18 @@
   .empty { color: var(--muted); }
   .actions:empty { display: none; }
   button:disabled { opacity: 0.4; cursor: default; }
+  #printArea { display: none; }
+  @media print {
+    body { padding: 0; background: #fff; color: #000; }
+    body > *:not(#printArea) { display: none !important; }
+    #printArea { display: block; font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    #printArea h1 { margin: 0 0 4px; font-size: 22px; }
+    #printArea h2 { margin: 18px 0 6px; padding-bottom: 2px; font-size: 16px; border-bottom: 1px solid #000; }
+    #printArea table { width: 100%; border-collapse: collapse; }
+    #printArea td { padding: 4px 0; border-bottom: 1px solid #ddd; }
+    #printArea td.n { padding-left: 12px; text-align: right; white-space: nowrap; }
+    #printArea tr.head td { font-weight: 700; }
+  }
   .cathead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 20px; }
   .cathead h2 { margin: 0; }
   .cathead button { min-height: 38px; padding: 0 10px; font-size: 15px; }
@@ -51,11 +63,12 @@
   <section id="view"></section>
 </main>
 <div id="modal" hidden></div>
+<div id="printArea"></div>
 
 <script type="module">
   import { initializeApp, deleteApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
   import { onAuthStateChanged, signOut, getAuth, createUserWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-  import { collection, doc, getDoc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, getDocs, query, where, writeBatch }
+  import { collection, doc, getDoc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, getDocs, query, where, writeBatch, serverTimestamp }
     from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
   import { app, auth, db } from "./firebase.js";
 
@@ -238,6 +251,38 @@
     reportBusy = false; render();
   }
 
+  const rd = (n) => Math.round(n * 100) / 100;
+  const dmy = (iso) => iso.split("-").reverse().join("/");
+
+  function fillPrintArea(r) {
+    const tbl = (rows, head) => h("table", {}, ...rows.map((cells, ri) =>
+      h("tr", { className: head && ri === 0 ? "head" : "" }, ...cells.map((c, i) => h("td", { className: i ? "n" : "", textContent: c })))));
+    const waiters = Object.entries(r.byWaiter).sort((a, b) => b[1].total - a[1].total);
+    const cats = Object.entries(r.byCat).sort((a, b) => b[1].sum - a[1].sum);
+    $("printArea").replaceChildren(
+      h("h1", { textContent: "Platea Fast Food" }),
+      h("p", { textContent: "Ημερήσια αναφορά · " + dmy(r.date) + " (06:00–06:00)" }),
+      h("h2", { textContent: "Έσοδα" }),
+      tbl([["Σύνολο", money(r.total)], ["Μετρητά", money(r.pay.cash)], ["Κάρτα", money(r.pay.card)], ["Τραπέζια που έκλεισαν", String(r.count)]]),
+      h("h2", { textContent: "Ανά σερβιτόρο" }),
+      tbl([["Σερβιτόρος", "Τραπέζια", "Έσοδα"], ...waiters.map(([n, w]) => [n, String(w.count), money(w.total)])], true),
+      h("h2", { textContent: "Ανά κατηγορία" }),
+      tbl([["Κατηγορία", "Τεμάχια", "Έσοδα"], ...cats.map(([n, k]) => [n, String(k.qty), money(k.sum)])], true));
+  }
+
+  async function printReportOnKitchen() {
+    const r = report;
+    try {
+      await addDoc(collection(db, "printJobs"), {
+        type: "report", status: "receipt", createdAt: serverTimestamp(),
+        date: r.date, count: r.count, total: rd(r.total), cash: rd(r.pay.cash), card: rd(r.pay.card),
+        waiters: Object.entries(r.byWaiter).map(([name, w]) => ({ name, count: w.count, total: rd(w.total) })),
+        cats: Object.entries(r.byCat).map(([name, k]) => ({ name, qty: k.qty, sum: rd(k.sum) }))
+      });
+      alert("Η αναφορά στάλθηκε για εκτύπωση.");
+    } catch (e) { fail(e); }
+  }
+
   function reportsView() {
     const date = h("input", { type: "date", value: reportDate, onchange: (e) => { reportDate = e.target.value; report = null; if (reportDate) loadReport(); } });
     const out = [
@@ -247,6 +292,7 @@
     ];
     if (report && report.date === reportDate) {
       if (!report.count) return [...out, empty("Δεν έκλεισε κανένα τραπέζι αυτή την ημέρα.")];
+      out.push(h("div", { className: "actions" }, btn("Εκτύπωση στον εκτυπωτή", printReportOnKitchen, ""), btn("Αποθήκευση PDF", () => { fillPrintArea(report); window.print(); })));
       out.push(h("h2", { textContent: "Σύνολο: " + money(report.total) }), h("p", { className: "empty", textContent: report.count + " τραπέζια έκλεισαν" }));
       out.push(row(h("span", { textContent: "Μετρητά" }), money(report.pay.cash), []), row(h("span", { textContent: "Κάρτα" }), money(report.pay.card), []));
       out.push(h("h2", { textContent: "Ανά σερβιτόρο" }));
