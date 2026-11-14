@@ -137,7 +137,7 @@
         h("div", { className: "nm" }, h("span", { className: off ? "off" : "", textContent: i.name }), h("small", { textContent: off ? "Εξαντλήθηκε" : money(i.price) })),
         h("button", { textContent: "+", disabled: off, onclick: () => {
           const l = cart.find((x) => x.id === i.id && !x.note);
-          if (l) l.qty++; else cart.push({ id: i.id, name: i.name, price: i.price, qty: 1, note: "" });
+          if (l) l.qty++; else cart.push({ id: i.id, name: i.name, price: i.price, qty: 1, note: "", cat: (st.categories.find((c) => c.id === i.categoryId) || {}).name || "" });
           render();
         } })));
     }
@@ -171,7 +171,7 @@
     if (!cart.length) return;
     button.disabled = true;
     button.textContent = "Αποστολή…";
-    const items = [...(o ? o.items : []), ...cart.map(({ name, price, qty, note }) => ({ name, price, qty, note }))];
+    const items = [...(o ? o.items : []), ...cart.map(({ name, price, qty, note, cat }) => ({ name, price, qty, note, cat: cat || "" }))];
     const lines = cart.map(({ qty, name, note }) => ({ qty, name, note }));
     const ref = o ? doc(db, "orders", o.id) : doc(collection(db, "orders"));
     const b = writeBatch(db);
