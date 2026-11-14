@@ -30,6 +30,7 @@
   .off { color: var(--muted); text-decoration: line-through; }
   .empty { color: var(--muted); }
   .actions:empty { display: none; }
+  button:disabled { opacity: 0.4; cursor: default; }
   :focus-visible { outline: 3px solid var(--night); outline-offset: 2px; }
 </style>
 </head>
@@ -64,8 +65,9 @@
   const add = (c, data) => run(addDoc(collection(db, c), data));
   const upd = (c, id, data) => run(updateDoc(doc(db, c, id), data));
   const del = (c, id) => run(deleteDoc(doc(db, c, id)));
+  const swapOrder = (a, b) => b && Promise.all([upd("categories", a.id, { order: b.order }), upd("categories", b.id, { order: a.order })]);
 
-  const btn = (label, onclick, cls = "quiet") => h("button", { type: "button", textContent: label, className: cls, onclick });
+  const btn = (label, onclick, cls = "quiet", disabled = false) => h("button", { type: "button", textContent: label, className: cls, onclick, disabled });
   const field = (placeholder, price) => h("input", { placeholder, required: true, ...(price ? { inputMode: "decimal" } : {}) });
   const empty = (text) => h("p", { className: "empty", textContent: text });
   const row = (nameEl, priceText, actions) =>
@@ -80,7 +82,9 @@
     const cats = [...state.categories].sort((a, b) => a.order - b.order);
     return [
       makeForm([field("Νέα κατηγορία")], (name) => add("categories", { name, order: Date.now() })),
-      ...(cats.length ? cats.map((c) => row(h("span", { textContent: c.name }), "", [
+      ...(cats.length ? cats.map((c, idx) => row(h("span", { textContent: c.name }), "", [
+        btn("↑", () => swapOrder(c, cats[idx - 1]), "quiet", idx === 0),
+        btn("↓", () => swapOrder(c, cats[idx + 1]), "quiet", idx === cats.length - 1),
         btn("Αλλαγή", () => { const n = (prompt("Όνομα κατηγορίας", c.name) || "").trim(); if (n) upd("categories", c.id, { name: n }); }),
         btn("Διαγραφή", () => {
           if (state.menuItems.some((i) => i.categoryId === c.id)) return alert("Η κατηγορία έχει προϊόντα. Μετακίνησέ τα ή διέγραψέ τα πρώτα.");
@@ -175,18 +179,21 @@
     try {
       const snap = await getDocs(query(collection(db, "orders"), where("closedAt", ">=", start), where("closedAt", "<", end)));
       const orders = snap.docs.map((x) => x.data()).filter((o) => o.status === "paid");
-      const byWaiter = {}, byItem = {};
+      const byWaiter = {}, byCat = {}, pay = { cash: 0, card: 0, none: 0 }, catOf = {};
+      for (const i of state.menuItems) { const c = state.categories.find((x) => x.id === i.categoryId); if (c) catOf[i.name] = c.name; }
       let total = 0;
       for (const o of orders) {
         total += o.total;
+        pay[o.payment === "cash" || o.payment === "card" ? o.payment : "none"] += o.total;
         const w = byWaiter[o.waiterName] || (byWaiter[o.waiterName] = { total: 0, count: 0 });
         w.total += o.total; w.count++;
         for (const l of o.items) {
-          const k = byItem[l.name] || (byItem[l.name] = { qty: 0, sum: 0 });
+          const cn = l.cat || catOf[l.name] || "Άλλα";
+          const k = byCat[cn] || (byCat[cn] = { qty: 0, sum: 0 });
           k.qty += l.qty; k.sum += l.price * l.qty;
         }
       }
-      report = { date: reportDate, count: orders.length, total, byWaiter, byItem };
+      report = { date: reportDate, count: orders.length, total, pay, byWaiter, byCat };
     } catch (e) { fail(e); }
     reportBusy = false; render();
   }
@@ -201,12 +208,14 @@
     if (report && report.date === reportDate) {
       if (!report.count) return [...out, empty("Δεν έκλεισε κανένα τραπέζι αυτή την ημέρα.")];
       out.push(h("h2", { textContent: "Σύνολο: " + money(report.total) }), h("p", { className: "empty", textContent: report.count + " τραπέζια έκλεισαν" }));
+      out.push(row(h("span", { textContent: "Μετρητά" }), money(report.pay.cash), []), row(h("span", { textContent: "Κάρτα" }), money(report.pay.card), []));
+      if (report.pay.none) out.push(row(h("span", { textContent: "Χωρίς καταχώριση" }), money(report.pay.none), []));
       out.push(h("h2", { textContent: "Ανά σερβιτόρο" }));
       for (const [name, w] of Object.entries(report.byWaiter).sort((a, b) => b[1].total - a[1].total))
         out.push(row(h("span", { textContent: name + " (" + w.count + ")" }), money(w.total), []));
-      out.push(h("h2", { textContent: "Προϊόντα" }));
-      for (const [name, k] of Object.entries(report.byItem).sort((a, b) => b[1].qty - a[1].qty))
-        out.push(row(h("span", { textContent: k.qty + "× " + name }), money(k.sum), []));
+      out.push(h("h2", { textContent: "Κατηγορίες" }));
+      for (const [name, k] of Object.entries(report.byCat).sort((a, b) => b[1].sum - a[1].sum))
+        out.push(row(h("span", { textContent: name + " (" + k.qty + " τεμ.)" }), money(k.sum), []));
     }
     return out;
   }
