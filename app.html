@@ -58,6 +58,20 @@
   .check { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; font-weight: 600; }
   .check input { width: 24px; height: 24px; }
   .wide { display: flex; width: 100%; margin-top: 8px; }
+#printArea { display: none; }
+  @media print {
+    body { padding: 0; background: #fff; color: #000; }
+    body > *:not(#printArea) { display: none !important; }
+    #printArea { display: block; max-width: 420px; margin: 0 auto; font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    #printArea h1 { margin: 0 0 4px; font-size: 22px; }
+    #printArea p { margin: 0 0 4px; }
+    #printArea table { width: 100%; margin-top: 10px; border-collapse: collapse; }
+    #printArea td { padding: 4px 0; border-bottom: 1px solid #ddd; }
+    #printArea td.n { padding-left: 12px; text-align: right; white-space: nowrap; }
+    #printArea tr.sub td { padding-top: 0; font-size: 13px; color: #444; }
+    #printArea tr.total td { font-size: 18px; font-weight: 700; border-bottom: 0; border-top: 2px solid #000; }
+    #printArea .fine { margin-top: 16px; font-size: 12px; text-align: center; color: #444; }
+  }
   .pair { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
   #bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); background: var(--night); }
   #bar button { display: flex; width: 100%; max-width: 640px; min-height: 54px; margin: 0 auto; }
@@ -68,6 +82,7 @@
 <main id="page" hidden><section id="view"></section></main>
 <div id="bar" hidden></div>
 <div id="modal" hidden></div>
+<div id="printArea"></div>
 
 <script type="module">
   import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
@@ -158,7 +173,7 @@
           h("span", { textContent: money(l.price * l.qty) })));
       }
       out.push(h("div", { className: "pair" },
-        h("button", { className: "quiet", textContent: "Λογαριασμός", onclick: (e) => printBill(t, o, e.target) }),
+        h("button", { className: "quiet", textContent: "Λογαριασμός", onclick: () => billDialog(t, o) }),
         h("button", { className: "quiet", textContent: "Επανεκτύπωση", onclick: (e) => reprint(t, o, e.target) }),
         h("button", { className: "quiet", textContent: "Κλείσιμο τραπεζιού", onclick: () => closeDialog(t, o) })));
     }
@@ -245,6 +260,34 @@
       alert("Ο λογαριασμός στάλθηκε για εκτύπωση.");
     } catch (e) { alert("Κάτι πήγε στραβά: " + (e.code || e.message)); }
     button.disabled = false;
+  }
+
+  const stampNow = () => new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Athens", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date()).replace(",", "");
+
+  function fillBillPrint(t, o) {
+    const rows = [];
+    for (const l of o.items) {
+      rows.push(h("tr", {}, h("td", { textContent: l.qty + "× " + l.name }), h("td", { className: "n", textContent: money(l.price * l.qty) })));
+      const sub = [l.extras && l.extras.length ? "+ " + extrasText(l.extras) : "", l.note].filter(Boolean).join(" · ");
+      if (sub) rows.push(h("tr", { className: "sub" }, h("td", { colSpan: 2, textContent: sub })));
+    }
+    rows.push(h("tr", { className: "total" }, h("td", { textContent: "ΣΥΝΟΛΟ" }), h("td", { className: "n", textContent: money(o.total) })));
+    $("printArea").replaceChildren(
+      h("h1", { textContent: "Platea Fast Food" }),
+      h("p", { textContent: "Λογαριασμός · Τραπέζι " + t.name + " · " + stampNow() }),
+      h("p", { textContent: "Σερβιτόρος: " + (o.waiterName || "") }),
+      h("table", {}, ...rows),
+      h("p", { className: "fine", textContent: "Δεν αποτελεί φορολογικό παραστατικό." }));
+  }
+
+  function billDialog(t, o) {
+    const modal = $("modal");
+    modal.replaceChildren(h("div", { className: "card" },
+      h("h2", { textContent: "Λογαριασμός · " + money(o.total) }),
+      h("button", { className: "wide", textContent: "Εκτύπωση στον εκτυπωτή", onclick: async (e) => { await printBill(t, o, e.target); modal.hidden = true; } }),
+      h("button", { className: "quiet wide", textContent: "Αποθήκευση PDF", onclick: () => { modal.hidden = true; fillBillPrint(t, o); window.print(); } }),
+      h("button", { className: "quiet wide", textContent: "Άκυρο", onclick: () => { modal.hidden = true; } })));
+    modal.hidden = false;
   }
 
   function closeDialog(t, o) {
