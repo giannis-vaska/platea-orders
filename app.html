@@ -44,6 +44,11 @@
   .qty button { min-width: 44px; padding: 0; }
   .off { color: var(--muted); text-decoration: line-through; }
   .muted { color: var(--muted); }
+  .menu { display: grid; grid-template-columns: 112px 1fr; gap: 12px; align-items: start; }
+  .cats { position: sticky; top: 8px; display: flex; flex-direction: column; gap: 6px; max-height: calc(100vh - 80px); overflow-y: auto; }
+  .cats button { justify-content: flex-start; min-height: 52px; padding: 8px 10px; font-size: 16px; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+  .cats button.on { color: #fff; background: var(--night); border-color: var(--night); }
+  .items .row:first-child { padding-top: 0; border-top: 0; }
   .pair { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
   #bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); background: var(--night); }
   #bar button { display: flex; width: 100%; max-width: 640px; min-height: 54px; margin: 0 auto; }
@@ -112,11 +117,12 @@
     }
 
     out.push(h("h2", { textContent: "Νέα παραγγελία" }));
-    out.push(h("div", { className: "chips" }, ...cats.map((c) =>
-      h("button", { className: "quiet" + (c.id === view.catId ? " on" : ""), textContent: c.name, onclick: () => { view.catId = c.id; render(); } }))));
+    const catCol = h("div", { className: "cats" }, ...cats.map((c) =>
+      h("button", { className: "quiet" + (c.id === view.catId ? " on" : ""), textContent: c.name, onclick: () => { view.catId = c.id; render(); } })));
+    const itemCol = h("div", { className: "items" });
     for (const i of st.items.filter((x) => x.categoryId === view.catId).sort(byName)) {
       const off = i.available === false;
-      out.push(h("div", { className: "row" },
+      itemCol.append(h("div", { className: "row" },
         h("div", { className: "nm" }, h("span", { className: off ? "off" : "", textContent: i.name }), h("small", { textContent: off ? "Εξαντλήθηκε" : money(i.price) })),
         h("button", { textContent: "+", disabled: off, onclick: () => {
           const l = cart.find((x) => x.id === i.id && !x.note);
@@ -124,6 +130,8 @@
           render();
         } })));
     }
+    if (!itemCol.children.length) itemCol.append(h("p", { className: "muted", textContent: "Κανένα προϊόν." }));
+    out.push(h("div", { className: "menu" }, catCol, itemCol));
 
     if (cart.length) {
       out.push(h("h2", { textContent: "Στο καλάθι" }));
