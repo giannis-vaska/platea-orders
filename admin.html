@@ -179,12 +179,12 @@
     try {
       const snap = await getDocs(query(collection(db, "orders"), where("closedAt", ">=", start), where("closedAt", "<", end)));
       const orders = snap.docs.map((x) => x.data()).filter((o) => o.status === "paid");
-      const byWaiter = {}, byCat = {}, pay = { cash: 0, card: 0, none: 0 }, catOf = {};
+      const byWaiter = {}, byCat = {}, pay = { cash: 0, card: 0 }, catOf = {};
       for (const i of state.menuItems) { const c = state.categories.find((x) => x.id === i.categoryId); if (c) catOf[i.name] = c.name; }
       let total = 0;
       for (const o of orders) {
         total += o.total;
-        pay[o.payment === "cash" || o.payment === "card" ? o.payment : "none"] += o.total;
+        pay[o.payment === "card" ? "card" : "cash"] += o.total;
         const w = byWaiter[o.waiterName] || (byWaiter[o.waiterName] = { total: 0, count: 0 });
         w.total += o.total; w.count++;
         for (const l of o.items) {
@@ -209,7 +209,6 @@
       if (!report.count) return [...out, empty("Δεν έκλεισε κανένα τραπέζι αυτή την ημέρα.")];
       out.push(h("h2", { textContent: "Σύνολο: " + money(report.total) }), h("p", { className: "empty", textContent: report.count + " τραπέζια έκλεισαν" }));
       out.push(row(h("span", { textContent: "Μετρητά" }), money(report.pay.cash), []), row(h("span", { textContent: "Κάρτα" }), money(report.pay.card), []));
-      if (report.pay.none) out.push(row(h("span", { textContent: "Χωρίς καταχώριση" }), money(report.pay.none), []));
       out.push(h("h2", { textContent: "Ανά σερβιτόρο" }));
       for (const [name, w] of Object.entries(report.byWaiter).sort((a, b) => b[1].total - a[1].total))
         out.push(row(h("span", { textContent: name + " (" + w.count + ")" }), money(w.total), []));
