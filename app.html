@@ -179,6 +179,7 @@
         h("button", { className: "quiet", textContent: "Λογαριασμός", onclick: () => billDialog(t, o) }),
         h("button", { className: "quiet", textContent: "Επανεκτύπωση", onclick: (e) => reprint(t, o, e.target) }),
         h("button", { className: "quiet", textContent: "Μεταφορά", onclick: () => moveDialog(t, o) }),
+        h("button", { className: "quiet", textContent: "Χωρισμός", onclick: () => go({ name: "split", tableId: t.id, back: view, tab: "items", picks: [], method: null, print: false, n: 2, methods: ["cash", "cash"] }) }),
         h("button", { className: "quiet", textContent: "Κλείσιμο τραπεζιού", onclick: () => closeDialog(t, o) })));
     }
 
@@ -330,6 +331,119 @@
     catch (e) { alert("Κάτι πήγε στραβά: " + (e.code || e.message)); }
   }
 
+  const splitShares = (total, n) => {
+    const out = []; let acc = 0;
+    for (let k = 0; k < n; k++) {
+      const s = k < n - 1 ? Math.round((total / n) * 100) / 100 : Math.round((total - acc) * 100) / 100;
+      out.push(s); acc = Math.round((acc + s) * 100) / 100;
+    }
+    return out;
+  };
+
+  const paidOrder = (t, o, items, total, payment) => ({
+    items, total, tableId: t.id, tableName: t.name, waiterId: o.waiterId, waiterName: o.waiterName,
+    status: "paid", payment, splitOf: o.id, createdAt: serverTimestamp(), closedAt: serverTimestamp()
+  });
+
+  async function payPart(t, o, picks, method, printIt) {
+    const lines = [], rest = [];
+    o.items.forEach((l, i) => {
+      const q = picks[i] || 0;
+      if (q > 0) lines.push({ ...l, qty: q });
+      if (q < l.qty) rest.push({ ...l, qty: l.qty - q });
+    });
+    const part = sum(lines);
+    const b = writeBatch(db);
+    b.set(doc(collection(db, "orders")), paidOrder(t, o, lines, part, method));
+    if (rest.length) b.update(doc(db, "orders", o.id), { items: rest, total: sum(rest) });
+    else {
+      b.update(doc(db, "orders", o.id), { items: [], total: 0, status: "paid", payment: method, closedAt: serverTimestamp() });
+      b.update(doc(db, "tables", t.id), { status: "free", orderId: null });
+    }
+    if (printIt) b.set(doc(collection(db, "printJobs")), billJob(t, { id: o.id, waiterName: o.waiterName, items: lines, total: part }, method));
+    try {
+      await b.commit();
+      view.picks = []; view.print = false; view.method = null;
+      if (rest.length) render(); else go({ name: "tables" });
+    } catch (e) { alert("Κάτι πήγε στραβά: " + (e.code || e.message)); render(); }
+  }
+
+  async function payEqual(t, o, n, methods, printIt) {
+    const shares = splitShares(o.total, n);
+    const b = writeBatch(db);
+    for (let k = 0; k < n; k++) {
+      const f = o.total ? shares[k] / o.total : 0;
+      const lines = o.items.map((l) => ({ ...l, qty: Math.round(l.qty * f * 1000) / 1000 }));
+      b.set(doc(collection(db, "orders")), paidOrder(t, o, lines, shares[k], methods[k]));
+      if (printIt) {
+        const one = [{ qty: 1, name: "Μερίδα " + (k + 1) + "/" + n, price: shares[k], note: "", extras: [] }];
+        b.set(doc(collection(db, "printJobs")), billJob(t, { id: o.id, waiterName: o.waiterName, items: one, total: shares[k] }, methods[k]));
+      }
+    }
+    b.update(doc(db, "orders", o.id), { items: [], total: 0, status: "paid", payment: "split", closedAt: serverTimestamp() });
+    b.update(doc(db, "tables", t.id), { status: "free", orderId: null });
+    try { await b.commit(); go({ name: "tables" }); }
+    catch (e) { alert("Κάτι πήγε στραβά: " + (e.code || e.message)); render(); }
+  }
+
+  function splitView() {
+    $("bar").hidden = true;
+    const t = st.tables.find((x) => x.id === view.tableId);
+    const o = t && openOrder(t);
+    if (!o) { view = { name: "tables" }; return tablesView(); }
+    const back = view.back;
+    const seg = (current, onPick) => h("div", { className: "seg" }, ...[["cash", "Μετρητά"], ["card", "Κάρτα"]].map(([k, label]) =>
+      h("button", { className: "quiet" + (current === k ? " on" : ""), textContent: label, onclick: () => onPick(k) })));
+    const printBox = h("label", { className: "check" },
+      h("input", { type: "checkbox", checked: view.print, onchange: (e) => { view.print = e.target.checked; } }),
+      view.tab === "equal" ? "Εκτύπωση λογαριασμού για κάθε άτομο" : "Εκτύπωση λογαριασμού για αυτό το μέρος");
+    const tabs = h("div", { className: "seg" }, ...[["items", "Ανά προϊόν"], ["equal", "Ίσο μοίρασμα"]].map(([k, label]) =>
+      h("button", { className: "quiet" + (view.tab === k ? " on" : ""), textContent: label, onclick: () => { view.tab = k; render(); } })));
+    const out = [
+      h("header", {}, h("h1", { textContent: "Χωρισμός · " + t.name }), h("button", { className: "quiet", textContent: "Πίσω", onclick: () => go(back) })),
+      h("p", { className: "muted", textContent: "Υπόλοιπο: " + money(o.total) }),
+      tabs
+    ];
+
+    if (view.tab === "items") {
+      const sel = Math.round(o.items.reduce((s, l, i) => s + l.price * (view.picks[i] || 0), 0) * 100) / 100;
+      const all = o.items.every((l, i) => (view.picks[i] || 0) === l.qty);
+      out.push(h("button", { className: "quiet", textContent: "Επιλογή όλων", onclick: () => { view.picks = o.items.map((l) => l.qty); render(); } }));
+      o.items.forEach((l, i) => {
+        const n = view.picks[i] || 0;
+        const bump = (d) => { view.picks[i] = Math.max(0, Math.min(l.qty, n + d)); render(); };
+        out.push(h("div", { className: "row" },
+          h("div", { className: "nm" }, l.qty + "× " + l.name,
+            h("small", { textContent: money(l.price) + " / τεμ." + (l.extras && l.extras.length ? " · + " + extrasText(l.extras) : "") })),
+          h("div", { className: "qty" },
+            h("button", { className: "quiet", textContent: "−", onclick: () => bump(-1) }),
+            h("b", { textContent: String(n) }),
+            h("button", { textContent: "+", onclick: () => bump(1) }))));
+      });
+      out.push(h("h2", { textContent: "Πληρωμή" }), seg(view.method, (k) => { view.method = k; render(); }), printBox,
+        h("button", { className: "wide", disabled: !sel || !view.method, textContent: (all ? "Πληρωμή και κλείσιμο · " : "Πληρωμή μέρους · ") + money(sel),
+          onclick: (e) => { e.target.disabled = true; payPart(t, o, view.picks, view.method, view.print); } }));
+    } else {
+      const n = view.n;
+      while (view.methods.length < n) view.methods.push("cash");
+      const shares = splitShares(o.total, n);
+      out.push(h("div", { className: "row" }, h("b", { textContent: "Άτομα" }),
+        h("div", { className: "qty" },
+          h("button", { className: "quiet", textContent: "−", onclick: () => { view.n = Math.max(2, n - 1); render(); } }),
+          h("b", { textContent: String(n) }),
+          h("button", { textContent: "+", onclick: () => { view.n = Math.min(12, n + 1); render(); } }))));
+      for (let k = 0; k < n; k++) {
+        out.push(h("div", { className: "row" },
+          h("div", { className: "nm" }, "Άτομο " + (k + 1), h("small", { textContent: money(shares[k]) })),
+          h("button", { className: "quiet", textContent: view.methods[k] === "card" ? "Κάρτα" : "Μετρητά",
+            onclick: () => { view.methods[k] = view.methods[k] === "card" ? "cash" : "card"; render(); } })));
+      }
+      out.push(printBox, h("button", { className: "wide", textContent: "Πληρωμή και κλείσιμο · " + money(o.total),
+        onclick: (e) => { e.target.disabled = true; payEqual(t, o, n, view.methods.slice(0, n), view.print); } }));
+    }
+    return out;
+  }
+
   function closeDialog(t, o) {
     const modal = $("modal");
     let method = null;
@@ -363,7 +477,7 @@
     modal.hidden = false;
   }
 
-  function render() { $("view").replaceChildren(...(view.name === "order" ? orderView() : tablesView())); }
+  function render() { $("view").replaceChildren(...(view.name === "order" ? orderView() : view.name === "split" ? splitView() : tablesView())); }
 
   onAuthStateChanged(auth, async (user) => {
     if (!user) return location.replace("index.html");
