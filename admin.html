@@ -231,7 +231,8 @@
     const start = new Date(y, m - 1, d, DAY_START_HOUR), end = new Date(y, m - 1, d + 1, DAY_START_HOUR);
     try {
       const snap = await getDocs(query(collection(db, "orders"), where("closedAt", ">=", start), where("closedAt", "<", end)));
-      const orders = snap.docs.map((x) => x.data()).filter((o) => o.status === "paid");
+      const orders = snap.docs.map((x) => ({ id: x.id, ...x.data() })).filter((o) => o.status === "paid");
+      const groups = new Set();
       const byWaiter = {}, byCat = {}, pay = { cash: 0, card: 0 }, catOf = {};
       for (const i of state.menuItems) { const c = state.categories.find((x) => x.id === i.categoryId); if (c) catOf[i.name] = c.name; }
       let total = 0;
@@ -239,14 +240,17 @@
         total += o.total;
         pay[o.payment === "card" ? "card" : "cash"] += o.total;
         const w = byWaiter[o.waiterName] || (byWaiter[o.waiterName] = { total: 0, count: 0 });
-        w.total += o.total; w.count++;
+        const gid = o.splitOf || o.id;
+        if (!groups.has(gid)) { groups.add(gid); w.count++; }
+        w.total += o.total;
         for (const l of o.items) {
           const cn = l.cat || catOf[l.name] || "Άλλα";
           const k = byCat[cn] || (byCat[cn] = { qty: 0, sum: 0 });
           k.qty += l.qty; k.sum += l.price * l.qty;
         }
       }
-      report = { date: reportDate, count: orders.length, total, pay, byWaiter, byCat };
+      for (const k of Object.values(byCat)) k.qty = Math.round(k.qty * 100) / 100;
+      report = { date: reportDate, count: groups.size, total, pay, byWaiter, byCat };
     } catch (e) { fail(e); }
     reportBusy = false; render();
   }
