@@ -72,6 +72,9 @@
     #printArea tr.total td { font-size: 18px; font-weight: 700; border-bottom: 0; border-top: 2px solid #000; }
     #printArea .fine { margin-top: 16px; font-size: 12px; text-align: center; color: #444; }
   }
+  input[type="search"] { width: 100%; min-height: 46px; margin: 0 0 10px; padding: 8px 10px; font: inherit; color: var(--ink); background: #fff; border: 1.5px solid var(--line); border-radius: 6px; }
+  .tlist { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+  .tlist button { justify-content: flex-start; text-align: left; }
   .pair { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
   #bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); background: var(--night); }
   #bar button { display: flex; width: 100%; max-width: 640px; min-height: 54px; margin: 0 auto; }
@@ -175,21 +178,28 @@
       out.push(h("div", { className: "pair" },
         h("button", { className: "quiet", textContent: "Λογαριασμός", onclick: () => billDialog(t, o) }),
         h("button", { className: "quiet", textContent: "Επανεκτύπωση", onclick: (e) => reprint(t, o, e.target) }),
+        h("button", { className: "quiet", textContent: "Μεταφορά", onclick: () => moveDialog(t, o) }),
         h("button", { className: "quiet", textContent: "Κλείσιμο τραπεζιού", onclick: () => closeDialog(t, o) })));
     }
 
     out.push(h("h2", { textContent: "Νέα παραγγελία" }));
     const catCol = h("div", { className: "cats" }, ...cats.map((c) =>
-      h("button", { className: "quiet" + (c.id === view.catId ? " on" : ""), textContent: c.name, onclick: () => { view.catId = c.id; render(); } })));
+      h("button", { className: "quiet" + (c.id === view.catId ? " on" : ""), textContent: c.name, onclick: () => { view.catId = c.id; view.q = ""; render(); } })));
     const itemCol = h("div", { className: "items" });
-    for (const i of st.items.filter((x) => x.categoryId === view.catId).sort(byName)) {
-      const off = i.available === false;
-      itemCol.append(h("div", { className: "row" },
-        h("div", { className: "nm" }, h("span", { className: off ? "off" : "", textContent: i.name }), h("small", { textContent: off ? "Εξαντλήθηκε" : money(i.price) })),
-        h("button", { textContent: "+", disabled: off, onclick: () => (i.extras && i.extras.length ? extrasChooser(i, (ex) => addLine(i, ex)) : addLine(i, [])) })));
-    }
-    if (!itemCol.children.length) itemCol.append(h("p", { className: "muted", textContent: "Κανένα προϊόν." }));
-    out.push(h("div", { className: "menu" }, catCol, itemCol));
+    const norm = (v) => String(v).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const fillItems = () => {
+      const q = norm(view.q || "").trim();
+      const list = (q ? st.items.filter((x) => norm(x.name).includes(q)) : st.items.filter((x) => x.categoryId === view.catId)).sort(byName);
+      itemCol.replaceChildren(...list.map((i) => {
+        const off = i.available === false;
+        return h("div", { className: "row" },
+          h("div", { className: "nm" }, h("span", { className: off ? "off" : "", textContent: i.name }), h("small", { textContent: off ? "Εξαντλήθηκε" : money(i.price) })),
+          h("button", { textContent: "+", disabled: off, onclick: () => (i.extras && i.extras.length ? extrasChooser(i, (ex) => addLine(i, ex)) : addLine(i, [])) }));
+      }), ...(list.length ? [] : [h("p", { className: "muted", textContent: "Κανένα προϊόν." })]));
+    };
+    fillItems();
+    const search = h("input", { type: "search", placeholder: "Αναζήτηση προϊόντος…", value: view.q || "", oninput: (e) => { view.q = e.target.value; fillItems(); } });
+    out.push(search, h("div", { className: "menu" }, catCol, itemCol));
 
     if (cart.length) {
       out.push(h("h2", { textContent: "Στο καλάθι" }));
@@ -288,6 +298,36 @@
       h("button", { className: "quiet wide", textContent: "Αποθήκευση PDF", onclick: () => { modal.hidden = true; fillBillPrint(t, o); window.print(); } }),
       h("button", { className: "quiet wide", textContent: "Άκυρο", onclick: () => { modal.hidden = true; } })));
     modal.hidden = false;
+  }
+
+  function moveDialog(t, o) {
+    const modal = $("modal");
+    const rows = st.tables.filter((x) => x.id !== t.id).sort(byName).map((x) => {
+      const target = openOrder(x);
+      return h("button", { className: target ? "quiet" : "", textContent: x.name + (target ? " · συγχώνευση (" + money(target.total) + ")" : " · ελεύθερο"), onclick: () => moveOrder(t, o, x, target) });
+    });
+    modal.replaceChildren(h("div", { className: "card" },
+      h("h2", { textContent: "Τραπέζι " + t.name + " → ;" }),
+      h("p", { className: "muted", textContent: "Διάλεξε τραπέζι. Αν έχει ήδη παραγγελία, οι δύο παραγγελίες ενώνονται." }),
+      h("div", { className: "tlist" }, ...rows),
+      h("button", { className: "quiet wide", textContent: "Άκυρο", onclick: () => { modal.hidden = true; } })));
+    modal.hidden = false;
+  }
+
+  async function moveOrder(t, o, x, target) {
+    if (!confirm((target ? "Συγχώνευση του τραπεζιού " : "Μεταφορά του τραπεζιού ") + t.name + " στο " + x.name + ";")) return;
+    const b = writeBatch(db);
+    b.update(doc(db, "tables", t.id), { status: "free", orderId: null });
+    if (target) {
+      const items = [...target.items, ...o.items];
+      b.update(doc(db, "orders", target.id), { items, total: sum(items) });
+      b.update(doc(db, "orders", o.id), { status: "merged", mergedInto: target.id });
+    } else {
+      b.update(doc(db, "orders", o.id), { tableId: x.id, tableName: x.name });
+      b.update(doc(db, "tables", x.id), { status: "busy", orderId: o.id });
+    }
+    try { await b.commit(); $("modal").hidden = true; go({ name: "tables" }); }
+    catch (e) { alert("Κάτι πήγε στραβά: " + (e.code || e.message)); }
   }
 
   function closeDialog(t, o) {
