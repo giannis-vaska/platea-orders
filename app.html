@@ -28,9 +28,9 @@
     text-decoration: none; cursor: pointer; }
   button:disabled { opacity: 0.45; cursor: default; }
   button.quiet, a.btn.quiet { color: var(--ink); background: transparent; border: 1.5px solid var(--line); }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
-  .grid button { flex-direction: column; min-height: 84px; font-size: 20px; color: var(--ink); background: #fff; border: 1.5px solid var(--line); }
-  .grid button small { font-size: 14px; font-weight: 600; }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .grid button { flex-direction: column; min-width: 0; min-height: 66px; padding: 0 4px; font-size: 18px; line-height: 1.15; text-align: center; overflow-wrap: anywhere; color: var(--ink); background: #fff; border: 1.5px solid var(--line); }
+  .grid button small { font-size: 12px; font-weight: 600; }
   .grid button.busy { color: #fff; background: var(--red); border-color: var(--red); }
   .chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 6px; }
   .chips button { white-space: nowrap; }
